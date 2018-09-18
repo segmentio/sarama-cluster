@@ -281,6 +281,41 @@ var _ = Describe("Consumer", func() {
 		}, "30s", "100ms").Should(BeNumerically(">=", 2000))
 	})
 
+	It("should consume partitions with ErrorModePartitions", func() {
+		count := int32(0)
+		consume := func(consumerID string) {
+			defer GinkgoRecover()
+
+			config := NewConfig()
+			config.Group.Mode = ConsumerModePartitions
+			config.Group.ErrorMode = ErrorModePartitions
+			config.Consumer.Offsets.Initial = sarama.OffsetOldest
+
+			cs, err := NewConsumer(testKafkaAddrs, "partitions2", testTopics, config)
+			Expect(err).NotTo(HaveOccurred())
+			defer cs.Close()
+
+			for pc := range cs.Partitions() {
+				go func(pc PartitionConsumer) {
+					defer pc.Close()
+
+					for msg := range pc.Messages() {
+						atomic.AddInt32(&count, 1)
+						cs.MarkOffset(msg, "")
+					}
+				}(pc)
+			}
+		}
+
+		go consume("A")
+		go consume("B")
+		go consume("C")
+
+		Eventually(func() int32 {
+			return atomic.LoadInt32(&count)
+		}, "30s", "100ms").Should(BeNumerically(">=", 2000))
+	})
+
 	It("should consume/commit/resume", func() {
 		acc := make(chan *testConsumerMessage, 20000)
 		consume := func(consumerID string, max int32) {

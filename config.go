@@ -16,13 +16,19 @@ const (
 	ConsumerModePartitions
 )
 
+type ErrorMode uint8
+
+const (
+	ErrorModeMultiplex ErrorMode = iota
+	ErrorModePartitions
+)
+
 // Config extends sarama.Config with Group specific namespace
 type Config struct {
 	sarama.Config
 
 	// Group is the namespace for group management properties
 	Group struct {
-
 		// The strategy to use for the allocation of partitions to consumers (defaults to StrategyRange)
 		PartitionStrategy Strategy
 
@@ -34,9 +40,18 @@ type Config struct {
 		// themselves.
 		Mode ConsumerMode
 
+		// ErrorMode determines whether errors from PartitionConsumers are aggregated into the cluster consumer's error
+		// channel or are returned via each individual PartitionConsumer's error channel.
+		//
+		// This setting is ignored unless Mode is set to ConsumerModePartitions.
+		//
+		// For backward compatibility, the default value is ErrorModeMultiplex.  The recommended value is
+		// ErrorModePartitions so that the consumer behaves as documented.
+		ErrorMode ErrorMode
+
 		Offsets struct {
 			Retry struct {
-				// The numer retries when committing offsets (defaults to 3).
+				// The number of retries when committing offsets (defaults to 3).
 				Max int
 			}
 			Synchronization struct {
@@ -54,7 +69,7 @@ type Config struct {
 
 		Heartbeat struct {
 			// Interval between each heartbeat (defaults to 3s). It should be no more
-			// than 1/3rd of the Group.Session.Timout setting
+			// than 1/3rd of the Group.Session.Timeout setting
 			Interval time.Duration
 		}
 

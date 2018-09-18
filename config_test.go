@@ -21,6 +21,7 @@ var _ = Describe("Config", func() {
 		Expect(subject.Metadata.Retry.Max).To(Equal(3))
 		Expect(subject.Group.Offsets.Synchronization.DwellTime).NotTo(BeZero())
 		// Expect(subject.Config.Version).To(Equal(sarama.V0_9_0_0))
+		Expect(subject.Group.ErrorMode).To(Equal(ErrorModeMultiplex))
 	})
 
 })

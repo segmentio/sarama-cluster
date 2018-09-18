@@ -98,7 +98,15 @@ func (c *partitionConsumer) Close() error {
 	return c.closeErr
 }
 
-func (c *partitionConsumer) waitFor(stopper <-chan none, errors chan<- error) {
+func (c *partitionConsumer) waitFor(stopper <-chan none) {
+	select {
+	case <-stopper:
+	case <-c.dying:
+	}
+	close(c.dead)
+}
+
+func (c *partitionConsumer) waitForMuxErrors(stopper <-chan none, errors chan<- error) {
 	defer close(c.dead)
 
 	for {
