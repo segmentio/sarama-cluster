@@ -22,5 +22,5 @@
 
 
 [[constraint]]
-  name = "github.com/Shopify/sarama"
-  version = "^1.14.0"
+  name = "github.com/segmentio/sarama"
+  branch = "update-producer-metadata-if-retries-disabled"
