@@ -23,4 +23,4 @@
 
 [[constraint]]
   name = "github.com/segmentio/sarama"
-  branch = "update-producer-metadata-if-retries-disabled"
+  branch = "segment-stable"

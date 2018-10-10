@@ -36,7 +36,7 @@ var _ = Describe("Notification", func() {
 })
 
 var _ = Describe("balancer", func() {
-	var subject *balancer
+	var topics map[string]topicInfo
 
 	BeforeEach(func() {
 		client := &mockClient{
@@ -48,7 +48,7 @@ var _ = Describe("balancer", func() {
 		}
 
 		var err error
-		subject, err = newBalancerFromMeta(client, map[string]sarama.ConsumerGroupMemberMetadata{
+		topics, err = topicInfoFromMetadata(client, map[string]sarama.ConsumerGroupMemberMetadata{
 			"b": {Topics: []string{"three", "one"}},
 			"a": {Topics: []string{"one", "two"}},
 		})
@@ -56,16 +56,16 @@ var _ = Describe("balancer", func() {
 	})
 
 	It("should parse from meta data", func() {
-		Expect(subject.topics).To(HaveLen(3))
+		Expect(topics).To(HaveLen(3))
 	})
 
 	It("should perform", func() {
-		Expect(subject.Perform(StrategyRange)).To(Equal(map[string]map[string][]int32{
+		Expect(assign(Range, topics)).To(Equal(map[string]map[string][]int32{
 			"a": {"one": {0, 1}, "two": {0, 1, 2}},
 			"b": {"one": {2, 3}, "three": {0, 1}},
 		}))
 
-		Expect(subject.Perform(StrategyRoundRobin)).To(Equal(map[string]map[string][]int32{
+		Expect(assign(RoundRobin, topics)).To(Equal(map[string]map[string][]int32{
 			"a": {"one": {0, 2}, "two": {0, 1, 2}},
 			"b": {"one": {1, 3}, "three": {0, 1}},
 		}))
@@ -73,12 +73,24 @@ var _ = Describe("balancer", func() {
 
 })
 
-var _ = Describe("topicInfo", func() {
+var _ = Describe("TopicInfo", func() {
+
+	makeTopicInfo := func(memberIDs []string, nums []int32) topicInfo {
+		members := make([]Member, len(memberIDs))
+		for i, memberID := range memberIDs {
+			members[i] = Member{ID: memberID}
+		}
+		partitions := make([]Partition, len(nums))
+		for i, num := range nums {
+			partitions[i] = Partition{Topic: "test", ID: num}
+		}
+		return topicInfo{members: members, partitions: partitions}
+	}
 
 	DescribeTable("Ranges",
 		func(memberIDs []string, partitions []int32, expected map[string][]int32) {
-			info := topicInfo{MemberIDs: memberIDs, Partitions: partitions}
-			Expect(info.Ranges()).To(Equal(expected))
+			info := makeTopicInfo(memberIDs, partitions)
+			Expect(Range.Balance(info.members, info.partitions)).To(Equal(expected))
 		},
 
 		Entry("three members, three partitions", []string{"M1", "M2", "M3"}, []int32{0, 1, 2}, map[string][]int32{
@@ -103,8 +115,8 @@ var _ = Describe("topicInfo", func() {
 
 	DescribeTable("RoundRobin",
 		func(memberIDs []string, partitions []int32, expected map[string][]int32) {
-			info := topicInfo{MemberIDs: memberIDs, Partitions: partitions}
-			Expect(info.RoundRobin()).To(Equal(expected))
+			info := makeTopicInfo(memberIDs, partitions)
+			Expect(RoundRobin.Balance(info.members, info.partitions)).To(Equal(expected))
 		},
 
 		Entry("three members, three partitions", []string{"M1", "M2", "M3"}, []int32{0, 1, 2}, map[string][]int32{

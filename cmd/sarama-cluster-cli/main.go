@@ -9,8 +9,8 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/bsm/sarama-cluster"
 	"github.com/segmentio/sarama"
+	"github.com/segmentio/sarama-cluster"
 )
 
 var (

@@ -23,7 +23,12 @@ type Config struct {
 	// Group is the namespace for group management properties
 	Group struct {
 
+		// Balancer determines how partitions will be allocated to consumers.
+		// The default value is Range.
+		Balancer Balancer
+
 		// The strategy to use for the allocation of partitions to consumers (defaults to StrategyRange)
+		// Deprecated: use the Balancer field
 		PartitionStrategy Strategy
 
 		// By default, messages and errors from the subscribed topics and partitions are all multiplexed and
@@ -78,6 +83,9 @@ type Config struct {
 			// Custom metadata to include when joining the group. The user data for all joined members
 			// can be retrieved by sending a DescribeGroupRequest to the broker that is the
 			// coordinator for the group.
+			//
+			// If the configured Balancer provides UserData, then this field is
+			// ignored.
 			UserData []byte
 		}
 	}
@@ -88,7 +96,7 @@ func NewConfig() *Config {
 	c := &Config{
 		Config: *sarama.NewConfig(),
 	}
-	c.Group.PartitionStrategy = StrategyRange
+	c.Group.Balancer = Range
 	c.Group.Offsets.Retry.Max = 3
 	c.Group.Offsets.Synchronization.DwellTime = c.Consumer.MaxProcessingTime
 	c.Group.Session.Timeout = 30 * time.Second
@@ -106,15 +114,23 @@ func (c *Config) Validate() error {
 	if c.Group.Session.Timeout%time.Millisecond != 0 {
 		sarama.Logger.Println("Group.Session.Timeout only supports millisecond precision; nanoseconds will be truncated.")
 	}
-	if c.Group.PartitionStrategy != StrategyRange && c.Group.PartitionStrategy != StrategyRoundRobin {
-		sarama.Logger.Println("Group.PartitionStrategy is not supported; range will be assumed.")
-	}
 	if !c.Version.IsAtLeast(minVersion) {
 		sarama.Logger.Println("Version is not supported; 0.9. will be assumed.")
 		c.Version = minVersion
 	}
 	if err := c.Config.Validate(); err != nil {
 		return err
+	}
+	if c.Group.Balancer == nil {
+		switch c.Group.PartitionStrategy {
+		case StrategyRoundRobin:
+			c.Group.Balancer = RoundRobin
+		case StrategyRange:
+			c.Group.Balancer = Range
+		default:
+			sarama.Logger.Println("Group.PartitionStrategy is not supported; range will be assumed.")
+			c.Group.Balancer = Range
+		}
 	}
 
 	// validate the Group values

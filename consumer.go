@@ -36,6 +36,8 @@ type Consumer struct {
 	partitions    chan PartitionConsumer
 	notifications chan *Notification
 
+	balancers []Balancer
+
 	commitMu sync.Mutex
 }
 
@@ -71,6 +73,21 @@ func NewConsumerFromClient(client *Client, groupID string, topics []string) (*Co
 		return nil, err
 	}
 
+	// create a priority-ordered list of balancers that are supported by this
+	// consumer.  the coordinator will choose the first once that all consumers
+	// in the group support.
+	balancers := []Balancer{client.config.Group.Balancer}
+	switch client.config.Group.Balancer {
+	case Range:
+		balancers = append(balancers, RoundRobin)
+	case RoundRobin:
+		balancers = append(balancers, Range)
+	default:
+		balancers = append(balancers, Range, RoundRobin)
+	}
+
+	balancers = append(balancers, Range)
+
 	sort.Strings(topics)
 	c := &Consumer{
 		client:   client,
@@ -87,6 +104,8 @@ func NewConsumerFromClient(client *Client, groupID string, topics []string) (*Co
 		errors:        make(chan error, client.config.ChannelBufferSize),
 		partitions:    make(chan PartitionConsumer, 1),
 		notifications: make(chan *Notification),
+
+		balancers: balancers,
 	}
 	if err := c.client.RefreshCoordinator(groupID); err != nil {
 		client.release()
@@ -568,7 +587,7 @@ func (c *Consumer) rebalance() (map[string][]int32, error) {
 	sort.Strings(c.extraTopics)
 
 	// Re-join consumer group
-	strategy, err := c.joinGroup()
+	balancer, topics, err := c.joinGroup()
 	switch {
 	case err == sarama.ErrUnknownMemberId:
 		c.membershipMu.Lock()
@@ -580,7 +599,7 @@ func (c *Consumer) rebalance() (map[string][]int32, error) {
 	}
 
 	// Sync consumer group state, fetch subscriptions
-	subs, err := c.syncGroup(strategy)
+	subs, err := c.syncGroup(balancer, topics)
 	switch {
 	case err == sarama.ErrRebalanceInProgress:
 		return nil, err
@@ -631,7 +650,7 @@ func (c *Consumer) subscribe(tomb *loopTomb, subs map[string][]int32) error {
 // --------------------------------------------------------------------
 
 // Send a request to the broker to join group on rebalance()
-func (c *Consumer) joinGroup() (*balancer, error) {
+func (c *Consumer) joinGroup() (Balancer, map[string]topicInfo, error) {
 	memberID, _ := c.membership()
 	req := &sarama.JoinGroupRequest{
 		GroupId:        c.groupID,
@@ -640,45 +659,60 @@ func (c *Consumer) joinGroup() (*balancer, error) {
 		ProtocolType:   "consumer",
 	}
 
-	meta := &sarama.ConsumerGroupMemberMetadata{
-		Version:  1,
-		Topics:   append(c.coreTopics, c.extraTopics...),
-		UserData: c.client.config.Group.Member.UserData,
-	}
-	err := req.AddGroupProtocolMetadata(string(StrategyRange), meta)
-	if err != nil {
-		return nil, err
-	}
-	err = req.AddGroupProtocolMetadata(string(StrategyRoundRobin), meta)
-	if err != nil {
-		return nil, err
+	for _, balancer := range c.balancers {
+		meta := &sarama.ConsumerGroupMemberMetadata{
+			Version:  1,
+			Topics:   append(c.coreTopics, c.extraTopics...),
+			UserData: balancer.UserData(),
+		}
+		if meta.UserData == nil {
+			meta.UserData = c.client.config.Group.Member.UserData
+		}
+		err := req.AddGroupProtocolMetadata(balancer.Name(), meta)
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 
 	broker, err := c.client.Coordinator(c.groupID)
 	if err != nil {
 		c.closeCoordinator(broker, err)
-		return nil, err
+		return nil, nil, err
 	}
 
 	resp, err := broker.JoinGroup(req)
 	if err != nil {
 		c.closeCoordinator(broker, err)
-		return nil, err
+		return nil, nil, err
 	} else if resp.Err != sarama.ErrNoError {
 		c.closeCoordinator(broker, resp.Err)
-		return nil, resp.Err
+		return nil, nil, resp.Err
 	}
 
-	var strategy *balancer
+	var balancer Balancer
+	var topics map[string]topicInfo
 	if resp.LeaderId == resp.MemberId {
-		members, err := resp.GetMembers()
-		if err != nil {
-			return nil, err
+		for _, b := range c.balancers {
+			if b.Name() == resp.GroupProtocol {
+				balancer = b
+				break
+			}
+		}
+		// the GroupProtocol is guaranteed to match one balancer.  otherwise,
+		// we would have gotten an error above from the coordinator.  this case
+		// is checked purely for defensive purposes.
+		if balancer == nil {
+			return nil, nil, sarama.ErrInconsistentGroupProtocol
 		}
 
-		strategy, err = newBalancerFromMeta(c.client, members)
+		members, err := resp.GetMembers()
 		if err != nil {
-			return nil, err
+			return nil, nil, err
+		}
+
+		topics, err = topicInfoFromMetadata(c.client, members)
+		if err != nil {
+			return nil, nil, err
 		}
 	}
 
@@ -687,12 +721,12 @@ func (c *Consumer) joinGroup() (*balancer, error) {
 	c.generationID = resp.GenerationId
 	c.membershipMu.Unlock()
 
-	return strategy, nil
+	return balancer, topics, nil
 }
 
 // Send a request to the broker to sync the group on rebalance().
 // Returns a list of topics and partitions to consume.
-func (c *Consumer) syncGroup(strategy *balancer) (map[string][]int32, error) {
+func (c *Consumer) syncGroup(balancer Balancer, topics map[string]topicInfo) (map[string][]int32, error) {
 	memberID, generationID := c.membership()
 	req := &sarama.SyncGroupRequest{
 		GroupId:      c.groupID,
@@ -700,8 +734,9 @@ func (c *Consumer) syncGroup(strategy *balancer) (map[string][]int32, error) {
 		GenerationId: generationID,
 	}
 
-	if strategy != nil {
-		for memberID, topics := range strategy.Perform(c.client.config.Group.PartitionStrategy) {
+	// balancer is non-nil when we are the CG leader.
+	if balancer != nil {
+		for memberID, topics := range assign(balancer, topics) {
 			if err := req.AddGroupAssignmentMember(memberID, &sarama.ConsumerGroupMemberAssignment{
 				Topics: topics,
 			}); err != nil {
