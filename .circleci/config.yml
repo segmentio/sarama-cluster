@@ -1,0 +1,69 @@
+version: 2
+jobs:
+  setup:
+    working_directory: /go/src/github.com/segmentio/sarama-cluster
+    docker:
+      - image: segment/circleci-golang:1.10
+    steps:
+      - checkout
+      - restore_cache:
+          keys:
+            - vendor-{{ checksum "Gopkg.lock" }}
+      - run:
+          name: Restoring Cached Dependencies
+          command: |
+            mkdir -p /tmp/vendor
+            cp -r /tmp/vendor/* ./vendor/ || true
+      - run:
+          name: Fetching Dependencies
+          command: dep ensure
+      - run:
+          name: Saving Cached Dependencies
+          command: |
+            cp -r ./vendor/* /tmp/vendor/
+            rm -f /tmp/Gopkg.lock
+      - save_cache:
+          key: vendor-{{ checksum "Gopkg.lock" }}
+          paths:
+            - /tmp/vendor
+      - persist_to_workspace:
+          root: .
+          paths: [.]
+
+  vet:
+    working_directory: /go/src/github.com/segmentio/sarama-cluster
+    docker:
+      - image: segment/circleci-golang:1.10
+    steps:
+      - attach_workspace: { at: . }
+      - run: make vet
+
+  test:
+    working_directory: /go/src/github.com/segmentio/sarama-cluster
+    docker:
+      - image: segment/circleci-golang:1.10
+
+    resource_class: large
+    steps:
+      - setup_remote_docker: { reusable: true, docker_layer_caching: true }
+      - attach_workspace: { at: . }
+      - run:
+          name: Install Java
+          command: sudo apt install default-jre
+      - run:
+          name: Test
+          command: |
+            sleep 20
+            make test
+
+workflows:
+  version: 2
+  run:
+    jobs:
+      - setup:
+          filters:
+            tags: { only: /.*/ }
+      - vet:
+          requires: [setup]
+      - test:
+          requires: [setup]
