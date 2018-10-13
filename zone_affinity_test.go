@@ -1,8 +1,10 @@
 package cluster
 
 import (
+	"os"
 	"reflect"
 	"strconv"
+	"strings"
 	"testing"
 	"unsafe"
 
@@ -13,17 +15,25 @@ import (
 
 func TestZoneAffinityBalancer_UserData(t *testing.T) {
 
-	t.Run("unknown zone", func(t *testing.T) {
-		b := ZoneAffinityBalancer{}
-		assert.Equal(t,"unknown", string(b.UserData()), "user data should be 'unknown'")
-	})
+	ci, _ := os.LookupEnv("CI")
+	if ci != "" {
+		// todo : this isn't really portable...
+		t.Run("us-west-2", func(t *testing.T) {
+			b := ZoneAffinityBalancer{}
+			zone := string(b.UserData())
+			assert.True(t, strings.HasPrefix(zone, "us-west-2"), "expected a us-west-2 az but got %s", zone)
+		})
+	} else {
+		t.Run("unknown zone", func(t *testing.T) {
+			b := ZoneAffinityBalancer{}
+			assert.Equal(t,"unknown", string(b.UserData()), "user data should be 'unknown'")
+		})
+	}
 
 	t.Run("override zone", func(t *testing.T) {
 		b := ZoneAffinityBalancer{Zone: "zone1"}
 		assert.Equal(t, "zone1", string(b.UserData()))
 	})
-
-	// todo : figure out if it's worth it to mock the ECS setup
 }
 
 func TestZoneAffinityBalancer_Balance(t *testing.T) {
