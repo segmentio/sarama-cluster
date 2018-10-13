@@ -4,7 +4,7 @@ import (
 	"math"
 	"sort"
 
-	"github.com/Shopify/sarama"
+	"github.com/segmentio/sarama"
 )
 
 // NotificationType defines the type of notification
@@ -70,100 +70,155 @@ func (n *Notification) success(current map[string][]int32) *Notification {
 
 // --------------------------------------------------------------------
 
-type topicInfo struct {
-	Partitions []int32
-	MemberIDs  []string
+// Member describes an individual participant in the consumer group.  It will
+// contain the UserData from the JoinGroupRequest (if provided).
+type Member struct {
+	ID       string
+	UserData []byte
 }
 
-func (info topicInfo) Perform(s Strategy) map[string][]int32 {
-	if s == StrategyRoundRobin {
-		return info.RoundRobin()
-	}
-	return info.Ranges()
+// Partition describes a single partition that is to be consumed.
+type Partition struct {
+	Topic  string
+	ID     int32
+	Leader *sarama.Broker
 }
 
-func (info topicInfo) Ranges() map[string][]int32 {
-	sort.Strings(info.MemberIDs)
+// Balancer is a strategy for dividing partitions to be consumed across group
+// members.
+type Balancer interface {
+	// Name is the name of this balancer.  It is sent in the JoinGroupRequest
+	// in the ConsumerGroupMemberMetadata.
+	Name() string
 
-	mlen := len(info.MemberIDs)
-	plen := len(info.Partitions)
-	res := make(map[string][]int32, mlen)
+	// Balancer returns a map of member id to assigned partitions.  This will
+	// only be run on the Consumer Group Leader, and the results will be sent
+	// back to the cluster via the SyncGroupResponse.
+	Balance(members []Member, partitions []Partition) map[string][]int32
 
-	for pos, memberID := range info.MemberIDs {
-		n, i := float64(plen)/float64(mlen), float64(pos)
-		min := int(math.Floor(i*n + 0.5))
-		max := int(math.Floor((i+1)*n + 0.5))
-		sub := info.Partitions[min:max]
-		if len(sub) > 0 {
-			res[memberID] = sub
-		}
-	}
-	return res
+	// UserData is any additional information that should be provided in the
+	// ConsumerGroupMetadata in the JoinGroupRequest.  If the balancer does not
+	// require any custom data, then this function should return nil.
+	UserData() []byte
 }
 
-func (info topicInfo) RoundRobin() map[string][]int32 {
-	sort.Strings(info.MemberIDs)
+var _ Balancer = &builtinBalancer{}
 
-	mlen := len(info.MemberIDs)
-	res := make(map[string][]int32, mlen)
-	for i, pnum := range info.Partitions {
-		memberID := info.MemberIDs[i%mlen]
-		res[memberID] = append(res[memberID], pnum)
-	}
-	return res
+type builtinBalancer struct {
+	name string
+	fn   func(members []Member, partitions []Partition) map[string][]int32
 }
 
-// --------------------------------------------------------------------
-
-type balancer struct {
-	client sarama.Client
-	topics map[string]topicInfo
+func (bb *builtinBalancer) Name() string {
+	return bb.name
 }
 
-func newBalancerFromMeta(client sarama.Client, members map[string]sarama.ConsumerGroupMemberMetadata) (*balancer, error) {
-	balancer := newBalancer(client)
-	for memberID, meta := range members {
-		for _, topic := range meta.Topics {
-			if err := balancer.Topic(topic, memberID); err != nil {
-				return nil, err
-			}
-		}
-	}
-	return balancer, nil
+func (bb *builtinBalancer) Balance(members []Member, partitions []Partition) map[string][]int32 {
+	return bb.fn(members, partitions)
 }
 
-func newBalancer(client sarama.Client) *balancer {
-	return &balancer{
-		client: client,
-		topics: make(map[string]topicInfo),
-	}
-}
-
-func (r *balancer) Topic(name string, memberID string) error {
-	topic, ok := r.topics[name]
-	if !ok {
-		nums, err := r.client.Partitions(name)
-		if err != nil {
-			return err
-		}
-		topic = topicInfo{
-			Partitions: nums,
-			MemberIDs:  make([]string, 0, 1),
-		}
-	}
-	topic.MemberIDs = append(topic.MemberIDs, memberID)
-	r.topics[name] = topic
+func (bb *builtinBalancer) UserData() []byte {
 	return nil
 }
 
-func (r *balancer) Perform(s Strategy) map[string]map[string][]int32 {
+// Range is the default and assigns partition ranges to consumers.
+// Example with six partitions and two consumers:
+//   C1: [0, 1, 2]
+//   C2: [3, 4, 5]
+var Range = &builtinBalancer{
+	name: string(StrategyRange),
+	fn: func(members []Member, partitions []Partition) map[string][]int32 {
+		sort.Slice(members, func(i, j int) bool {
+			return members[i].ID < members[j].ID
+		})
+
+		mlen := len(members)
+		plen := len(partitions)
+		res := make(map[string][]int32, mlen)
+
+		for pos, member := range members {
+			n, i := float64(plen)/float64(mlen), float64(pos)
+			min := int(math.Floor(i*n + 0.5))
+			max := int(math.Floor((i+1)*n + 0.5))
+			sub := partitions[min:max]
+			if len(sub) > 0 {
+				parts := make([]int32, len(sub))
+				for i := range sub {
+					parts[i] = sub[i].ID
+				}
+				res[member.ID] = parts
+			}
+		}
+		return res
+	},
+}
+
+// RoundRobin assigns partitions by alternating over consumers.
+// Example with six partitions and two consumers:
+//   C1: [0, 2, 4]
+//   C2: [1, 3, 5]
+var RoundRobin = &builtinBalancer{
+	name: string(StrategyRoundRobin),
+	fn: func(members []Member, partitions []Partition) map[string][]int32 {
+		sort.Slice(members, func(i, j int) bool {
+			return members[i].ID < members[j].ID
+		})
+
+		mlen := len(members)
+		res := make(map[string][]int32, mlen)
+		for i, pnum := range partitions {
+			memberID := members[i%mlen].ID
+			res[memberID] = append(res[memberID], pnum.ID)
+		}
+		return res
+	},
+}
+
+type topicInfo struct {
+	members    []Member
+	partitions []Partition
+}
+
+func topicInfoFromMetadata(client sarama.Client, members map[string]sarama.ConsumerGroupMemberMetadata) (map[string]topicInfo, error) {
+	topics := make(map[string]topicInfo)
+	for id, meta := range members {
+		for _, name := range meta.Topics {
+			topic, ok := topics[name]
+			if !ok {
+				nums, err := client.Partitions(name)
+				if err != nil {
+					return nil, err
+				}
+				for _, num := range nums {
+					leader, err := client.Leader(name, num)
+					if err != nil {
+						return nil, err
+					}
+					topic.partitions = append(topic.partitions, Partition{
+						Topic:  name,
+						ID:     num,
+						Leader: leader,
+					})
+				}
+			}
+			topic.members = append(topic.members, Member{
+				ID:       id,
+				UserData: meta.UserData,
+			})
+			topics[name] = topic
+		}
+	}
+	return topics, nil
+}
+
+func assign(balancer Balancer, topics map[string]topicInfo) map[string]map[string][]int32 {
 	res := make(map[string]map[string][]int32, 1)
-	for topic, info := range r.topics {
-		for memberID, partitions := range info.Perform(s) {
+	for name, t := range topics {
+		for memberID, partitions := range balancer.Balance(t.members, t.partitions) {
 			if _, ok := res[memberID]; !ok {
 				res[memberID] = make(map[string][]int32, 1)
 			}
-			res[memberID][topic] = partitions
+			res[memberID][name] = partitions
 		}
 	}
 	return res
