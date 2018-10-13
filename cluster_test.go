@@ -187,6 +187,10 @@ func (m *mockClient) Partitions(t string) ([]int32, error) {
 	return pts, nil
 }
 
+func (*mockClient) Leader(topic string, partition int32) (*sarama.Broker, error) {
+	return nil, nil
+}
+
 func (*mockConsumer) ConsumePartition(topic string, partition int32, offset int64) (sarama.PartitionConsumer, error) {
 	if offset > -1 && offset < 1000 {
 		return nil, sarama.ErrOffsetOutOfRange

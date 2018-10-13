@@ -10,22 +10,6 @@
   version = "v1.3.4"
 
 [[projects]]
-  digest = "1:f11e03e8297265765272534835027251cc808ed6dab124f5f5dbc37f7c908abb"
-  name = "github.com/Shopify/sarama"
-  packages = ["."]
-  pruneopts = ""
-  revision = "ec843464b50d4c8b56403ec9d589cf41ea30e722"
-  version = "v1.19.0"
-
-[[projects]]
-  digest = "1:6da5545112f73dbad12895d25e39818c1c3e8040ebba488d4d3fe43bc8685eb6"
-  name = "github.com/bsm/sarama-cluster"
-  packages = ["."]
-  pruneopts = ""
-  revision = "c618e605e15c0d7535f6c96ff8efbb0dba4fd66c"
-  version = "v2.1.15"
-
-[[projects]]
   digest = "1:56c130d885a4aacae1dd9c7b71cfe39912c7ebc1ff7d2b46083c8812996dc43b"
   name = "github.com/davecgh/go-spew"
   packages = ["spew"]
@@ -126,6 +110,14 @@
   version = "v2.0.2"
 
 [[projects]]
+  digest = "1:256484dbbcd271f9ecebc6795b2df8cad4c458dd0f5fd82a8c2fa0c29f233411"
+  name = "github.com/pmezard/go-difflib"
+  packages = ["difflib"]
+  pruneopts = ""
+  revision = "792786c7400a136282c1664665ae0a8db921c6c2"
+  version = "v1.0.0"
+
+[[projects]]
   branch = "master"
   digest = "1:15bcdc717654ef21128e8af3a63eec39a6d08a830e297f93d65163f87c8eb523"
   name = "github.com/rcrowley/go-metrics"
@@ -134,12 +126,23 @@
   revision = "e2704e165165ec55d062f5919b4b29494e9fa790"
 
 [[projects]]
-  branch = "update-producer-metadata-if-retries-disabled"
-  digest = "1:0415198484c99ebc28cfb1da098c56494e236e64a78c2a68acc649a732e622e7"
+  branch = "segment-stable"
+  digest = "1:d293ab31248cb34d3a02025a765ddb3880e598fd54c3d5cae66be8db71f39fbf"
   name = "github.com/segmentio/sarama"
   packages = ["."]
   pruneopts = ""
-  revision = "a15f23e1d4293d967923b800b1cd778494059079"
+  revision = "9884adb98272a7828b96fac83c665ce1589482f3"
+
+[[projects]]
+  digest = "1:c587772fb8ad29ad4db67575dad25ba17a51f072ff18a22b4f0257a4d9c24f75"
+  name = "github.com/stretchr/testify"
+  packages = [
+    "assert",
+    "require",
+  ]
+  pruneopts = ""
+  revision = "f35b8ab0b5a2cef36673838d662e249dd9c94686"
+  version = "v1.2.2"
 
 [[projects]]
   branch = "master"
@@ -199,11 +202,12 @@
   analyzer-name = "dep"
   analyzer-version = 1
   input-imports = [
-    "github.com/bsm/sarama-cluster",
     "github.com/onsi/ginkgo",
     "github.com/onsi/ginkgo/extensions/table",
     "github.com/onsi/gomega",
     "github.com/segmentio/sarama",
+    "github.com/stretchr/testify/assert",
+    "github.com/stretchr/testify/require",
   ]
   solver-name = "gps-cdcl"
   solver-version = 1
