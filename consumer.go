@@ -823,7 +823,7 @@ func (c *Consumer) fetchOffsets(subs map[string][]int32) (map[string]map[int32]o
 	return offsets, nil
 }
 
-// Send a request to the broker to leave the group on failes rebalance() and on Close()
+// Send a request to the broker to leave the group on fails rebalance() and on Close()
 func (c *Consumer) leaveGroup() error {
 	broker, err := c.client.Coordinator(c.groupID)
 	if err != nil {
@@ -837,8 +837,16 @@ func (c *Consumer) leaveGroup() error {
 		MemberId: memberID,
 	}); err != nil {
 		c.closeCoordinator(broker, err)
+		return err
 	}
-	return err
+
+	// clear the current member id in case we later re-join.  in that case,
+	// we'll get a new ID from the coordinator.
+	c.membershipMu.Lock()
+	c.memberID = ""
+	c.membershipMu.Unlock()
+
+	return nil
 }
 
 // --------------------------------------------------------------------
