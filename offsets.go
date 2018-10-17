@@ -3,7 +3,7 @@ package cluster
 import (
 	"sync"
 
-	"github.com/Shopify/sarama"
+	"github.com/segmentio/sarama"
 )
 
 // OffsetStash allows to accumulate offsets and

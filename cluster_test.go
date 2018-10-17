@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/Shopify/sarama"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
+	"github.com/segmentio/sarama"
 )
 
 const (
@@ -185,6 +185,10 @@ func (m *mockClient) Partitions(t string) ([]int32, error) {
 		return nil, sarama.ErrInvalidTopic
 	}
 	return pts, nil
+}
+
+func (*mockClient) Leader(topic string, partition int32) (*sarama.Broker, error) {
+	return nil, nil
 }
 
 func (*mockConsumer) ConsumePartition(topic string, partition int32, offset int64) (sarama.PartitionConsumer, error) {

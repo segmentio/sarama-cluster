@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Shopify/sarama"
+	"github.com/segmentio/sarama"
 )
 
 // PartitionConsumer allows code to consume individual partitions from the cluster.
