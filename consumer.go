@@ -619,32 +619,21 @@ func (c *Consumer) subscribe(tomb *loopTomb, subs map[string][]int32) error {
 		return err
 	}
 
-	// create consumers in parallel
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-
+	// fork consumers.  the rebalance must finish successfully once the
+	// assignment has been processed.  that doesn't necessarily mean that the
+	// partition consumers are started successfully.  if there's a temporary
+	// problem (e.g. some leaders not available), that's a separate concern from
+	// the rebalance operation and will heal in the background.
 	for topic, partitions := range subs {
 		for _, partition := range partitions {
-			wg.Add(1)
-
-			info := offsets[topic][partition]
-			go func(topic string, partition int32) {
-				if e := c.createConsumer(tomb, topic, partition, info); e != nil {
-					mu.Lock()
-					err = e
-					mu.Unlock()
-				}
-				wg.Done()
-			}(topic, partition)
+			t, p := topic, partition
+			tomb.Go(func(stopping <-chan none) {
+				c.consume(stopping, t, p, offsets[t][p])
+			})
 		}
 	}
-	wg.Wait()
 
-	if err != nil {
-		_ = c.release()
-		_ = c.leaveGroup()
-	}
-	return err
+	return nil
 }
 
 // --------------------------------------------------------------------
@@ -851,32 +840,60 @@ func (c *Consumer) leaveGroup() error {
 
 // --------------------------------------------------------------------
 
-func (c *Consumer) createConsumer(tomb *loopTomb, topic string, partition int32, info offsetInfo) error {
-	memberID, _ := c.membership()
-	sarama.Logger.Printf("cluster/consumer %s consume %s/%d from %d\n", memberID, topic, partition, info.NextOffset(c.client.config.Consumer.Offsets.Initial))
+func (c *Consumer) consume(stopping <-chan none, topic string, partition int32, info offsetInfo) {
+	// this function will run as long as the current generation is alive.  it
+	// ensures that the assigned partition is consumed even in the face of
+	// errors.  this is especially relevant in cases like leader elections or
+	// partitions being offline.  we wouldn't want to trigger rebalances in those
+	// cases because they're not necessary and would potentially put strain on
+	// the cluster.
+	for {
+		memberID, _ := c.membership()
+		sarama.Logger.Printf("cluster/consumer %s consume %s/%d from %d\n", memberID, topic, partition, info.NextOffset(c.client.config.Consumer.Offsets.Initial))
 
-	// Create partitionConsumer
-	pc, err := newPartitionConsumer(c.consumer, topic, partition, info, c.client.config.Consumer.Offsets.Initial)
-	if err != nil {
-		return err
-	}
-
-	// Store in subscriptions
-	c.subs.Store(topic, partition, pc)
-
-	// Start partition consumer goroutine
-	tomb.Go(func(stopper <-chan none) {
-		if c.client.config.Group.Mode == ConsumerModePartitions {
-			pc.waitFor(stopper)
-		} else {
-			pc.multiplex(stopper, c.messages, c.errors)
+		// Create partitionConsumer
+		pc, err := newPartitionConsumer(c.consumer, topic, partition, info, c.client.config.Consumer.Offsets.Initial)
+		if err != nil {
+			c.handleError(&Error{Ctx: "subscribe", error: err})
+			select {
+			case <-time.After(c.client.config.Group.Heartbeat.Interval):
+				// heartbeat is a semi-arbitrary timeout...intended to be short
+				// but not "too short".
+			case <-stopping:
+				return
+			}
+			continue
 		}
-	})
 
-	if c.client.config.Group.Mode == ConsumerModePartitions {
-		c.partitions <- pc
+		// Store in subscriptions
+		c.subs.Store(topic, partition, pc)
+
+		if c.client.config.Group.Mode == ConsumerModePartitions {
+			select {
+			case c.partitions <- pc:
+			case <-stopping:
+				// received a kill signal before could send to the client.
+				_ = pc.Close()
+				c.subs.Remove(topic, partition)
+				return
+			}
+		}
+
+		if c.client.config.Group.Mode == ConsumerModePartitions {
+			pc.waitFor(stopping)
+		} else {
+			pc.multiplex(stopping, c.messages, c.errors)
+		}
+
+		select {
+		case <-stopping:
+			return
+		default:
+			// consumer died but we still are assigned this partition.
+			_ = pc.Close()
+			c.subs.Remove(topic, partition)
+		}
 	}
-	return nil
 }
 
 func (c *Consumer) commitOffsetsWithRetry(retries int) error {

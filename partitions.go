@@ -225,6 +225,12 @@ func (m *partitionMap) Store(topic string, partition int32, pc *partitionConsume
 	m.mu.Unlock()
 }
 
+func (m *partitionMap) Remove(topic string, partition int32) {
+	m.mu.Lock()
+	delete(m.data, topicPartition{topic, partition})
+	m.mu.Unlock()
+}
+
 func (m *partitionMap) Snapshot() map[topicPartition]partitionState {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
