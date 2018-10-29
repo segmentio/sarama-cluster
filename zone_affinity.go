@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"io/ioutil"
+	"math/rand"
 	"net/http"
 	"strings"
 	"sync"
@@ -55,6 +56,17 @@ func (*ZoneAffinityBalancer) Balance(members []Member, partitions []Partition) m
 	// in zone if possible.
 	for zone, parts := range zonedPartitions {
 
+		// shuffle the partitions prior to assignment.  if the topic is
+		// semantically partitioned, then there's a possibility for hot
+		// partitions.  we don't want the same partitions to go to the same
+		// member on each rebalance, especially in cases where the consumer
+		// group uses autoscaling.  shuffling makes it possible to try different
+		// assignments with the hopes that the interaction between auto-scaling
+		// and rebalancing will eventually hit a steady state.
+		rand.Shuffle(len(parts), func(i, j int) {
+			parts[i], parts[j] = parts[j], parts[i]
+		})
+
 		consumers := zonedConsumers[zone]
 		if len(consumers) == 0 {
 			continue
@@ -106,6 +118,11 @@ func (*ZoneAffinityBalancer) Balance(members []Member, partitions []Partition) m
 	for _, partitions := range zonedPartitions {
 		remaining = append(remaining, partitions...)
 	}
+	// one last shuffle to ensure that the remaining partitions are
+	// pseudo-randomly assigned irrespective of AZ.
+	rand.Shuffle(len(remaining), func(i, j int) {
+		remaining[i], remaining[j] = remaining[j], remaining[i]
+	})
 
 	for _, member := range members {
 		assigned := assignments[member.ID]
