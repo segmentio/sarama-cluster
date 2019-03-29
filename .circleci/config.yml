@@ -3,7 +3,7 @@ jobs:
   setup:
     working_directory: /go/src/github.com/segmentio/sarama-cluster
     docker:
-      - image: segment/circleci-golang:1.10
+      - image: segment/circleci-golang:1.12
     steps:
       - checkout
       - restore_cache:
@@ -33,7 +33,7 @@ jobs:
   vet:
     working_directory: /go/src/github.com/segmentio/sarama-cluster
     docker:
-      - image: segment/circleci-golang:1.10
+      - image: segment/circleci-golang:1.12
     steps:
       - attach_workspace: { at: . }
       - run: make vet
@@ -41,7 +41,7 @@ jobs:
   test:
     working_directory: /go/src/github.com/segmentio/sarama-cluster
     docker:
-      - image: segment/circleci-golang:1.10
+      - image: segment/circleci-golang:1.12
 
     resource_class: large
     steps:
@@ -49,7 +49,9 @@ jobs:
       - attach_workspace: { at: . }
       - run:
           name: Install Java
-          command: sudo apt install default-jre
+          command: |
+            sudo apt-get update
+            sudo apt install default-jre
       - run:
           name: Test
           command: make test

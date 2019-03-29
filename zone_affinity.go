@@ -26,7 +26,7 @@ type ZoneAffinityBalancer struct {
 	// cannot be determined, it will be reported as "unknown".
 	Zone string
 
-	lock     sync.Mutex
+	lock sync.Mutex
 }
 
 func (*ZoneAffinityBalancer) Name() string {
@@ -149,18 +149,32 @@ func findZone() string {
 
 func whereAmI() string {
 	// https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/identify_ec2_instances.html
-	for _, path := range [...]string{
-		"/sys/devices/virtual/dmi/id/product_uuid",
-		"/sys/hypervisor/uuid",
-	} {
-		b, err := ioutil.ReadFile(path)
+	for _, fileCheck := range [...]struct {
+		path     string
+		prefixes []string
+	}{
+		{
+			path:     "/sys/devices/virtual/dmi/id/product_uuid",
+			prefixes: []string{"EC2", "ec2"},
+		},
+		{
+			path:     "/sys/hypervisor/uuid",
+			prefixes: []string{"EC2", "ec2"},
+		},
+		{
+			path:     "/sys/devices/virtual/dmi/id/board_asset_tag",
+			prefixes: []string{"i-"},
+		},
+	}{
+		b, err := ioutil.ReadFile(fileCheck.path)
 		if err != nil {
 			continue
 		}
 		s := string(b)
-		switch {
-		case strings.HasPrefix(s, "EC2"), strings.HasPrefix(s, "ec2"):
-			return "aws"
+		for _, prefix := range fileCheck.prefixes {
+			if strings.HasPrefix(s, prefix) {
+				return "aws"
+			}
 		}
 	}
 	return "somewhere"

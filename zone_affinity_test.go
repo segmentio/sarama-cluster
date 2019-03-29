@@ -18,6 +18,8 @@ func TestZoneAffinityBalancer_UserData(t *testing.T) {
 	ci, _ := os.LookupEnv("CI")
 	if ci != "" {
 		// todo : this isn't really portable...
+		// NOTE: us-west-2 is simply where the circleci EC2 hosts reside. If this test fails then it's
+		// likely that the EC2-detection logic in zone_affinity.go isn't working for a new EC2 setup.
 		t.Run("us-west-2", func(t *testing.T) {
 			b := ZoneAffinityBalancer{}
 			zone := string(b.UserData())
